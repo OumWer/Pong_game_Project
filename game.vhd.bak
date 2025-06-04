@@ -1,0 +1,156 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity game is
+	port(
+		CLOCK_50 : IN std_logic;
+		reset : IN std_logic;
+		SW : IN std_logic_vector(9 downto 0);
+
+		VGA_CLK : OUT std_logic;
+		VGA_HS : OUT std_logic;
+		VGA_VS : OUT std_logic;
+		VGA_BLANK : OUT std_logic;
+		VGA_SYNC : OUT std_logic;
+
+		VGA_R : OUT std_logic_vector(9 downto 0);
+		VGA_G : OUT std_logic_vector(9 downto 0);
+		VGA_B : OUT std_logic_vector(9 downto 0)
+	);
+end entity;
+
+architecture rtl of game is
+
+	-- VGA 25MHz clock
+	signal clock_25 : std_logic := '0';
+
+	-- Game signals
+	signal VGA_R_IN, VGA_G_IN, VGA_B_IN : std_logic_vector(9 downto 0);
+	signal x_out, y_out : integer range 0 to 1023;
+
+	-- Game logic
+	signal ball_x, ball_y : integer range 0 to 639 := 320;
+	signal ball_dx, ball_dy : integer := 1;
+	signal paddle_y : integer range 0 to 440 := 200;
+
+	-- Clock divider
+	signal frame_counter : integer := 0;
+	signal tick_60hz : std_logic := '0';
+
+	component vga
+		port(
+			clk     : in std_logic;
+			rst     : in std_logic;
+			rin     : in std_logic_vector(9 downto 0);
+			gin     : in std_logic_vector(9 downto 0);
+			bin     : in std_logic_vector(9 downto 0);
+
+			rout    : out std_logic_vector(9 downto 0);
+			gout    : out std_logic_vector(9 downto 0);
+			bout    : out std_logic_vector(9 downto 0);
+			hs      : out std_logic;
+			vs      : out std_logic;
+			clkout  : out std_logic;
+			blank   : out std_logic;
+			sync    : out std_logic;
+			x_out   : out integer range 0 to 1023;
+			y_out   : out integer range 0 to 1023
+		);
+	end component;
+
+begin
+
+	-- Clock divider for 25 MHz from 50 MHz
+	process(CLOCK_50)
+	begin
+		if rising_edge(CLOCK_50) then
+			clock_25 <= not clock_25;
+		end if;
+	end process;
+
+	-- Frame clock ~60Hz (slow down game movement)
+	process(clock_25)
+	begin
+		if rising_edge(clock_25) then
+			if frame_counter = 500000 then
+				frame_counter <= 0;
+				tick_60hz <= '1';
+			else
+				frame_counter <= frame_counter + 1;
+				tick_60hz <= '0';
+			end if;
+		end if;
+	end process;
+
+	-- Game Logic (ball + paddle)
+	process(clock_25)
+	begin
+		if rising_edge(clock_25) then
+			if reset = '0' then
+				ball_x <= 320;
+				ball_y <= 240;
+				ball_dx <= 1;
+				ball_dy <= 1;
+				paddle_y <= 200;
+			elsif tick_60hz = '1' then
+				-- Ball movement
+				ball_x <= ball_x + ball_dx;
+				ball_y <= ball_y + ball_dy;
+
+				-- Bounce off top/bottom
+				if ball_y <= 0 or ball_y >= 472 then
+					ball_dy <= -ball_dy;
+				end if;
+
+				-- Left paddle collision
+				if (ball_x <= 20 and ball_y >= paddle_y and ball_y <= paddle_y + 40) then
+					ball_dx <= -ball_dx;
+				end if;
+
+				-- Missed ball
+				if ball_x <= 0 or ball_x >= 639 then
+					ball_x <= 320;
+					ball_y <= 240;
+					ball_dx <= -ball_dx;
+					ball_dy <= -ball_dy;
+				end if;
+
+				-- Paddle movement
+				if SW(0) = '1' and paddle_y < 440 then
+					paddle_y <= paddle_y + 4;
+				elsif SW(1) = '1' and paddle_y > 0 then
+					paddle_y <= paddle_y - 4;
+				end if;
+			end if;
+		end if;
+	end process;
+
+	-- Drawing Logic
+	VGA_R_IN <= (others => '1') when (x_out >= ball_x and x_out < ball_x + 8 and y_out >= ball_y and y_out < ball_y + 8) else (others => '0');
+
+	VGA_G_IN <= (others => '1') when (x_out >= 10 and x_out < 20 and y_out >= paddle_y and y_out < paddle_y + 40) else (others => '0');
+
+	VGA_B_IN <= (others => '1') when (VGA_R_IN = (others => '0') and VGA_G_IN = (others => '0')) else (others => '0');
+
+	-- VGA Module
+	VGA_DRIVER : vga
+		port map(
+			clk     => clock_25,
+			rst     => not reset,
+			rin     => VGA_R_IN,
+			gin     => VGA_G_IN,
+			bin     => VGA_B_IN,
+			rout    => VGA_R,
+			gout    => VGA_G,
+			bout    => VGA_B,
+			hs      => VGA_HS,
+			vs      => VGA_VS,
+			clkout  => VGA_CLK,
+			sync    => VGA_SYNC,
+			blank   => VGA_BLANK,
+			x_out   => x_out,
+			y_out   => y_out
+		);
+
+end rtl;
